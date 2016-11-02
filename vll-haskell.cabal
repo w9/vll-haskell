@@ -24,6 +24,7 @@ library
                      , bytestring
                      , ansi-terminal
                      , mtl
+                     , MissingH
   default-language:    Haskell2010
 
 executable vll

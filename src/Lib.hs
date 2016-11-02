@@ -9,6 +9,8 @@ import Control.Monad
 import Control.Monad.State.Lazy
 import Data.Csv.Streaming
 import Data.List
+import Data.Bool
+import Data.String.Utils
 import Data.Char
 import Data.Foldable
 import Data.Vector (Vector)
@@ -104,8 +106,14 @@ cmdLine = do
           (_,_,errs) -> ioError (userError (concat errs ++ usageInfo "VLL" options))
 
     {-putStrLn $ "(options, filenames) = " ++ show (options, filenames)-}
-    fileContent <- BS.readFile $ head filenames
-    void . flip runStateT (1, [], []) . traverse_ processOneLine $ decodeWith (CSV.DecodeOptions . fromIntegral $ ord '\t') NoHeader fileContent
+    let filename = head filenames
+    fileContent <- BS.readFile filename
+
+    let isCSV = endswith ".csv" filename
+    let csvColSepChar = fromIntegral . ord $ bool '\t' ',' isCSV
+    let csvOptions = CSV.DecodeOptions csvColSepChar
+
+    void . flip runStateT (1, [], []) . traverse_ processOneLine $ decodeWith csvOptions NoHeader fileContent
 
     {-let cells = decodeCSV fileContent-}
 
