@@ -65,9 +65,6 @@ wrapInColor x s = setSGRCode [SetColor Foreground Vivid x] ++ s ++ setSGRCode [R
 updateLineWidths :: [Int] -> [Int] -> [Int]
 updateLineWidths = zipWithLonger 0 max
 
-calculateWidths :: [[String]] -> [Int]
-calculateWidths cells = foldr updateLineWidths [] $ map (map length) cells
-
 formatLine :: [Int] -> [String] -> [String]
 formatLine widths = wrapLineInColors . rewidthLine widths
 
@@ -82,21 +79,14 @@ processOneLine l = do
     let ws' = updateLineWidths (map length l) ws
     if i < 80 then put (i+1, ws', l : cache)
               else do
-                  liftIO . putStr . unlines . map (intercalate " " . wrapLineInColors . formatLine ws') $ reverse cache
-                  liftIO . putStrLn . intercalate " " . wrapLineInColors . formatLine ws' $ l
+                  liftIO . putStr . unlines . map (unwords . wrapLineInColors . formatLine ws') $ reverse cache
+                  liftIO . putStrLn . unwords . wrapLineInColors . formatLine ws' $ l
                   put (80, ws', [])
-
-
-
-formatCells :: [[String]] -> [[String]]
-formatCells cells = let (previewCells, restCells) = splitAt 80 cells
-                        widths = calculateWidths previewCells
-                     in map (formatLine widths) previewCells ++ iterateThrough widths restCells
 
 cmdLine :: IO ()
 cmdLine = do
     args <- getArgs
-    (options, filenames) <-
+    (options, fnames) <-
         case getOpt Permute options args of
           (o,n,[]  ) -> if Help `elem` o
                            then do
@@ -105,17 +95,13 @@ cmdLine = do
                            else return (o,n)
           (_,_,errs) -> ioError (userError (concat errs ++ usageInfo "VLL" options))
 
-    {-putStrLn $ "(options, filenames) = " ++ show (options, filenames)-}
-    let filename = head filenames
-    fileContent <- BS.readFile filename
+    {-putStrLn $ "(options, fnames) = " ++ show (options, fnames)-}
+    let fname = head fnames
+    fcontent <- BS.readFile fname
+    let fcontentWithComments = BS.lines fcontent
 
-    let isCSV = endswith ".csv" filename
+    let isCSV = endswith ".csv" fname
     let csvColSepChar = fromIntegral . ord $ bool '\t' ',' isCSV
     let csvOptions = CSV.DecodeOptions csvColSepChar
 
-    void . flip runStateT (1, [], []) . traverse_ processOneLine $ decodeWith csvOptions NoHeader fileContent
-
-    {-let cells = decodeCSV fileContent-}
-
-    {-putStrLn . unlines . map (intercalate " ") $ formatCells cells-}
-
+    void . flip runStateT (1, [], []) . traverse_ processOneLine $ decodeWith csvOptions NoHeader fcontent
