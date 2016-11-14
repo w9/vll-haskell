@@ -1,2 +1,3 @@
 main:
-	stack --silent ghci
+	stack build
+	stack exec vll ~/tmp/test_csv/companies.csv | less 

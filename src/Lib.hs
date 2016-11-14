@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiWayIf #-}
 
 module Lib
     ( module Lib
@@ -16,18 +18,24 @@ import Data.List
 import Data.Bool
 import Data.String.Utils
 import Data.Char
+import Data.Word
 import Data.Int
+import Data.Maybe
 import Data.Foldable
 import Data.Monoid
 import Data.Vector (Vector)
 import Data.Text (Text)
 import Debug.Trace
 import System.Environment
+import System.Console.Terminal.Size
 import System.Exit
 import System.Console.ANSI
 import System.Console.GetOpt
-import Control.Lens
+import System.IO
+import Control.Lens hiding (argument)
+import Options.Applicative.Simple hiding (Parser)
 
+import qualified Options.Applicative.Simple as OPT
 import qualified Data.Csv as CSV
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as BSL
@@ -35,32 +43,20 @@ import qualified Data.Vector as V
 import qualified Data.Text as T
 
    
-data Flag = Verbose
-          | Version 
-          | Help
-          deriving (Show, Eq)
-
-options :: [OptDescr Flag]
-options = [ Option ['v'] ["verbose"] (NoArg Verbose) "chatty output on stderr"
-          , Option ['V'] ["version"] (NoArg Version) "show version number"
-          , Option ['h'] ["help"]    (NoArg Help)    "display this message"
-          ]
-
-
 zipWithLonger :: a -> (a -> a -> a) -> [a] -> [a] -> [a]
 zipWithLonger _ _ [] [] = []
 zipWithLonger c f [] (b:bs) = f c b : zipWithLonger c f [] bs
 zipWithLonger c f (a:as) [] = f a c : zipWithLonger c f as []
 zipWithLonger c f (a:as) (b:bs) = f a b : zipWithLonger c f as bs
 
-makeWidth :: Int64 -> BSL.ByteString -> BSL.ByteString
-makeWidth l s = BSL.take l $ s <> BSL.repeat ' '
+makeWidth :: Int64 -> Int64 -> BSL.ByteString -> BSL.ByteString
+makeWidth m l s = BSL.take (m+l) $ s <> BSL.repeat ' '
 
-rewidthLine :: [Int64] -> [BSL.ByteString] -> [BSL.ByteString]
-rewidthLine = zipWith makeWidth
+rewidthLine :: Int64 -> [Int64] -> [BSL.ByteString] -> [BSL.ByteString]
+rewidthLine marginWidth = zipWith (makeWidth marginWidth)
 
-wrapLineInColors :: [BSL.ByteString] -> [BSL.ByteString]
-wrapLineInColors = zipWith wrapInColor (cycle [Yellow, Blue])
+wrapLineInColors :: [Color] -> [BSL.ByteString] -> [BSL.ByteString]
+wrapLineInColors colors = zipWith wrapInColor (cycle colors)
 
 wrapInColor :: Color -> BSL.ByteString -> BSL.ByteString
 wrapInColor x s = pre <> s <> post
@@ -71,8 +67,11 @@ wrapInColor x s = pre <> s <> post
 updateLineWidths :: [Int64] -> [Int64] -> [Int64]
 updateLineWidths = zipWithLonger 0 max
 
-formatLine :: [Int64] -> [BSL.ByteString] -> BSL.ByteString
-formatLine widths = BSL.intercalate " " . wrapLineInColors . rewidthLine widths
+formatLine :: [Color] -> Int64 -> [Int64] -> [BSL.ByteString] -> BSL.ByteString
+formatLine colors marginWidth widths = (<> "$")
+                                     . BSL.concat
+                                     . wrapLineInColors colors
+                                     . rewidthLine marginWidth widths
 
 
 type BS = BSL.ByteString
@@ -81,9 +80,29 @@ type Parserf a = BS.ByteString -> Parser a
 data ParsedLine = Comment BSL.ByteString
                 | Cells [BSL.ByteString]
 
+-- | magnify the env (options) to the sub-routines
 data ParsingEnv = ParsingEnv
-  { _initParserf :: Parserf [BSL.ByteString] }  -- it is fed as a env variable because the col_seq needs to be specified
+  { _colSep :: Char
+  , _commentPrefix :: Char
+  , _naiveParsing :: Bool
+  , _marginWidth :: Int64
+  , _colors :: [Color]
+  , _numProbingLines :: Int }
 makeLenses ''ParsingEnv
+
+
+envParser :: OPT.Parser ParsingEnv
+envParser = ParsingEnv
+  <$> option auto (long "column-separator" <> short 's' <> metavar "CHAR" <> value '\NUL' <> showDefault <> help "if set to '\\NUL', will use ',' if csv, '\\t' otherwise")
+  <*> option auto (long "comment-prefix" <> short 'c' <> metavar "CHAR" <> value '#' <> showDefault)
+  <*> switch (long "naive" <> help "disable quote parsing" <> showDefault)
+  <*> option auto (long "margin-width" <> short 'm' <> metavar "INT" <> value 1 <> showDefault <> help "num of spaces between columns")
+  <*> option auto (long "colors" <> metavar "COLORS" <> value [Yellow, Blue] <> showDefault <> help "cycling colors, ANSI only. see --list-colors")
+  <*> option auto (long "num-probing-lines" <> short 'p' <> metavar "INT" <> value (-1) <> showDefault <> help "if set to -1, will use twice the $LINES env variable")
+
+
+optparser :: OPT.Parser (ParsingEnv, [FilePath])
+optparser = liftA2 (,) envParser (some $ argument str (metavar "FILENAME..."))
 
 data ParsingState = ParsingState
   { _cellWidths  :: [Int64]
@@ -91,46 +110,16 @@ data ParsingState = ParsingState
   , _cachedLines :: [ParsedLine] }
 makeLenses ''ParsingState
 
+
 type ParsingRWS = RWS ParsingEnv [BS] ParsingState
 
 procedure :: [BSL.ByteString] -> ParsingRWS ()
 procedure lines = do
-  let (probingLines, remainingLines) = splitAt 80 lines
+  numProbingLines <- view numProbingLines
+  let (probingLines, remainingLines) = splitAt numProbingLines lines
   sequence_ $ map parseAndCache probingLines
            ++ [releaseCache]
            ++ map parseAndPrint remainingLines
-
--- this function should not know whether `pf` is an initParser or
--- a cached parser
-tryParse :: ([BS] -> ParsingRWS ()) -> Parserf [BS] -> BS -> ParsingRWS ()
-tryParse cont pf l = do
-  case pf (BSL.toStrict $ l <> "\n") of
-    Fail _ errMsg  -> error $ errMsg
-    Done rs -> error $ "Parser `Done` not expected. Current line: " ++ show l
-    Many rs pf' -> case rs of
-                     [] -> lastParserf ?= pf'
-                     [ecs] -> do
-                       lastParserf .= Nothing
-                       let cs = either error id ecs
-                       cellWidths %= updateLineWidths (map BSL.length cs)
-                       cont cs
-                     _ -> error $ "Unexpected: more than one (" ++ show (length rs) ++ ") records received in `Many`"
-  
-
-
-parseAndCache :: BS -> ParsingRWS ()
-parseAndCache l = do
-  let cont :: [BS] -> ParsingRWS ()
-      cont cs = cachedLines %= (++ [Cells cs])
-  pf <- use lastParserf
-  case pf of
-    Nothing -> if BSL.null l || BSL.head l == '#'
-                    then cachedLines %= (++ [Comment l])
-                    else do
-                        pf <- view initParserf
-                        tryParse cont pf l
-    Just pf -> tryParse cont pf l
-
 
 releaseCache :: ParsingRWS ()
 releaseCache = do
@@ -139,66 +128,109 @@ releaseCache = do
     Comment c -> tell [c]
     Cells cs  -> do
         ws <- use cellWidths
-        tell [formatLine ws cs]
+        colors <- view colors
+        marginWidth <- view marginWidth
+        tell [formatLine colors marginWidth ws cs]
   cachedLines .= []
+
+
+tryParseCells :: ([BS] -> ParsingRWS ()) -> Parserf [BS] -> BS -> ParsingRWS ()
+tryParseCells contCells pf l = do
+  case pf (BSL.toStrict $ l <> "\n") of
+    Fail _ errMsg  -> error $ errMsg ++ ": " ++ BSL.unpack l
+                        -- ^ TODO: This error should be thrown to the base stack so that the line number
+                        --         can be printed with the line
+    Done rs -> error $ "Parser `Done` not expected. Current line: " ++ show l
+    Many rs pf' -> case rs of
+                     [] -> lastParserf ?= pf'
+                     [ecs] -> do
+                       lastParserf .= Nothing
+                       let cs = map (BSL.pack . tail . init . show) $ either error id ecs
+                       cellWidths %= updateLineWidths (map BSL.length $ cs)
+                       contCells cs
+                     _ -> error $ "Unexpected: more than one (" ++ show (length rs) ++ ") records received in `Many`"
+
+  
+-- this function should not know whether `pf` is an initParser or
+-- a cached parser
+tryCSVParse :: (BS -> ParsingRWS ()) -> ([BS] -> ParsingRWS ()) -> BS -> ParsingRWS ()
+tryCSVParse contComment contCells l = do
+  pf <- use lastParserf
+  cp <- view commentPrefix
+  case pf of
+    Nothing -> if BSL.null l || BSL.head l == cp
+                    then contComment l
+                    else do
+                        csvColSepChar <- view colSep
+                        let csvColSepWord8 = fromIntegral $ ord csvColSepChar
+                        let csvOptions = CSV.DecodeOptions csvColSepWord8
+                        let Many _ pf = decodeWith csvOptions NoHeader
+                        tryParseCells contCells pf l
+    Just pf -> tryParseCells contCells pf l
+
+tryNaiveParse :: (BS -> ParsingRWS ()) -> ([BS] -> ParsingRWS ()) -> BS -> ParsingRWS ()
+tryNaiveParse contComment contCells l = do
+  cp <- view commentPrefix
+  if BSL.null l || BSL.head l == cp
+        then contComment l
+        else do
+            csvColSepChar <- view colSep
+            let cs = BSL.split csvColSepChar l
+            cellWidths %= updateLineWidths (map BSL.length $ cs)
+            contCells cs
+
+tryParse :: (BS -> ParsingRWS ()) -> ([BS] -> ParsingRWS ()) -> BS -> ParsingRWS ()
+tryParse contComment contCells l = do
+  naive <- view naiveParsing
+  if naive then tryNaiveParse contComment contCells l
+           else tryCSVParse contComment contCells l
+
+parseAndCache :: BS -> ParsingRWS ()
+parseAndCache l = do
+  let contComment l = cachedLines %= (++ [Comment l])
+  let contCells cs = cachedLines %= (++ [Cells cs])
+  tryParse contComment contCells l
 
 
 parseAndPrint :: BS -> ParsingRWS ()
 parseAndPrint l = do
-  let cont :: [BS] -> ParsingRWS ()
-      cont cs = do
-        ws <- use cellWidths
-        tell [formatLine ws cs]
+  let contComment l = tell [l]
+  let contCells cs = do
+        ws <- use cellWidths       -- `ws` is kept updated in the `tryCSVParse` module so we only need to extract it
+        colors <- view colors
+        marginWidth <- view marginWidth
+        tell [formatLine colors marginWidth ws cs]
+  tryParse contComment contCells l
 
-  pf <- use lastParserf
-  case pf of
-    Nothing -> if BSL.null l || BSL.head l == '#'
-                    then tell [l]
-                    else do
-                        pf <- view initParserf
-                        tryParse cont pf l
-    Just pf -> tryParse cont pf l
-
-
-test :: [String] -> [String]
-test flines =
-  let Many _ pf = decode NoHeader
-      initEnv = ParsingEnv
-          { _initParserf = pf }
-      initState = ParsingState
-          { _cellWidths  = []
-          , _lastParserf = Nothing
-          , _cachedLines = [] }
-   in map BSL.unpack . (^. _2) . (\rws -> evalRWS rws initEnv initState) . procedure . map BSL.pack $ flines
 
 
 cmdLine :: IO ()
 cmdLine = do
     args <- getArgs
-    (options, fnames) <-
-        case getOpt Permute options args of
-          (o,n,[]  ) -> if Help `elem` o
-                           then do
-                               putStrLn $ usageInfo "VLL" options
-                               exitSuccess
-                           else return (o,n)
-          (_,_,errs) -> ioError (userError (concat errs ++ usageInfo "VLL" options))
 
-    {-putStrLn $ "(options, fnames) = " ++ show (options, fnames)-}
-    let fname = head fnames
-    fcontent <- BSL.readFile fname
-    let fcontentWithComments = BSL.lines fcontent
+    ((initEnv, fnames),()) <- simpleOptions "0.0.1" "(V)iew (L)arge table. Fast." "" optparser empty
 
-    let isCSV = endswith ".csv" fname
-    let csvColSepChar = fromIntegral . ord $ bool '\t' ',' isCSV
-    let csvOptions = CSV.DecodeOptions csvColSepChar
-    let flines = BSL.lines fcontent
+    forM_ fnames $ \ fname -> do
 
-    let Many _ pf = decodeWith csvOptions NoHeader
-    let initEnv = ParsingEnv { _initParserf = pf }
-    let initState = ParsingState { _cellWidths  = [] , _lastParserf = Nothing , _cachedLines = [] }
+      let isCSV = endswith ".csv" fname
+      let csvColSepChar = bool '\t' ',' isCSV
 
-    mapM_ BSL.putStrLn . (^. _2) . (\rws -> evalRWS rws initEnv initState) $ procedure flines
+      terminalHeight <- liftM ((*2) . head . (++ [80]) . map height . catMaybes)
+                      . sequence . map hSize
+                      $ [stdout, stderr, stdin]
+
+      let initEnv' = initEnv & colSep %~ (\ x -> if (x == '\NUL') then csvColSepChar else x)
+                             & numProbingLines %~ (\ x -> if (x == (-1)) then terminalHeight else x)
+
+      let initState = ParsingState
+            { _cellWidths  = []
+            , _lastParserf = Nothing
+            , _cachedLines = [] }
+
+      fcontent <- BSL.readFile fname
+      let fcontentWithComments = BSL.lines fcontent
+      let flines = BSL.lines fcontent
+      mapM_ BSL.putStrLn . (^. _2) . (\rws -> evalRWS rws initEnv' initState) $ procedure flines
 
 
 -- |               | _cellWidths | _lastParser | _cachedLines | r _initParserf | w _output |
