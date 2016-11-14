@@ -67,10 +67,10 @@ wrapInColor x s = pre <> s <> post
 updateLineWidths :: [Int64] -> [Int64] -> [Int64]
 updateLineWidths = zipWithLonger 0 max
 
-formatLine :: [Color] -> Int64 -> [Int64] -> [BSL.ByteString] -> BSL.ByteString
-formatLine colors marginWidth widths = (<> "$")
+formatLine :: Bool -> [Color] -> Int64 -> [Int64] -> [BSL.ByteString] -> BSL.ByteString
+formatLine useColors colors marginWidth widths = (<> "$")
                                      . BSL.concat
-                                     . wrapLineInColors colors
+                                     . (if useColors then wrapLineInColors colors else id)
                                      . rewidthLine marginWidth widths
 
 
@@ -86,6 +86,7 @@ data ParsingEnv = ParsingEnv
   , _commentPrefix :: Char
   , _naiveParsing :: Bool
   , _marginWidth :: Int64
+  , _useColors :: Bool
   , _colors :: [Color]
   , _numProbingLines :: Int }
 makeLenses ''ParsingEnv
@@ -95,8 +96,9 @@ envParser :: OPT.Parser ParsingEnv
 envParser = ParsingEnv
   <$> option auto (long "column-separator" <> short 's' <> metavar "CHAR" <> value '\NUL' <> showDefault <> help "if set to '\\NUL', will use ',' if csv, '\\t' otherwise")
   <*> option auto (long "comment-prefix" <> short 'c' <> metavar "CHAR" <> value '#' <> showDefault)
-  <*> switch (long "naive" <> help "disable quote parsing" <> showDefault)
+  <*> switch (long "naive" <> help "disable quote parsing")
   <*> option auto (long "margin-width" <> short 'm' <> metavar "INT" <> value 1 <> showDefault <> help "num of spaces between columns")
+  <*> switch (long "use-colors" <> short 'z' <> help "color columns")
   <*> option auto (long "colors" <> metavar "COLORS" <> value [Yellow, Blue] <> showDefault <> help "cycling colors, ANSI only. see --list-colors")
   <*> option auto (long "num-probing-lines" <> short 'p' <> metavar "INT" <> value (-1) <> showDefault <> help "if set to -1, will use twice the $LINES env variable")
 
@@ -128,9 +130,10 @@ releaseCache = do
     Comment c -> tell [c]
     Cells cs  -> do
         ws <- use cellWidths
+        useColors <- view useColors
         colors <- view colors
         marginWidth <- view marginWidth
-        tell [formatLine colors marginWidth ws cs]
+        tell [formatLine useColors colors marginWidth ws cs]
   cachedLines .= []
 
 
@@ -197,9 +200,10 @@ parseAndPrint l = do
   let contComment l = tell [l]
   let contCells cs = do
         ws <- use cellWidths       -- `ws` is kept updated in the `tryCSVParse` module so we only need to extract it
+        useColors <- view useColors
         colors <- view colors
         marginWidth <- view marginWidth
-        tell [formatLine colors marginWidth ws cs]
+        tell [formatLine useColors colors marginWidth ws cs]
   tryParse contComment contCells l
 
 
