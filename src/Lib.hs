@@ -31,6 +31,8 @@ import System.Console.Terminal.Size
 import System.Exit
 import System.Console.ANSI
 import System.Console.GetOpt
+import System.Posix.Terminal
+import System.Posix
 import System.IO
 import Control.Lens hiding (argument)
 import Options.Applicative.Simple hiding (Parser)
@@ -91,16 +93,24 @@ data ParsingEnv = ParsingEnv
   , _numProbingLines :: Int }
 makeLenses ''ParsingEnv
 
-
 envParser :: OPT.Parser ParsingEnv
 envParser = ParsingEnv
-  <$> option auto (long "column-separator" <> short 's' <> metavar "CHAR" <> value '\NUL' <> showDefault <> help "if set to '\\NUL', will use ',' if csv, '\\t' otherwise")
-  <*> option auto (long "comment-prefix" <> short 'c' <> metavar "CHAR" <> value '#' <> showDefault)
-  <*> switch (long "naive" <> help "disable quote parsing")
-  <*> option auto (long "margin-width" <> short 'm' <> metavar "INT" <> value 1 <> showDefault <> help "num of spaces between columns")
-  <*> switch (long "use-colors" <> short 'z' <> help "color columns")
-  <*> option auto (long "colors" <> metavar "COLORS" <> value [Yellow, Blue] <> showDefault <> help "cycling colors, ANSI only. see --list-colors")
-  <*> option auto (long "num-probing-lines" <> short 'p' <> metavar "INT" <> value (-1) <> showDefault <> help "if set to -1, will use twice the $LINES env variable")
+  <$> option auto (long "column-separator"  <> short 's'        <> metavar "CHAR"       <> value '\NUL' <> showDefault
+                                            <> help ("'\\NUL' means ',' for *.csv and '\\t' for all other extensions, "
+                                                  ++ "including pipes. You might want to use --naive as well if you set this manually"))
+  <*> option auto (long "comment-prefix"    <> short 'c'        <> metavar "CHAR"       <> value '#'    <> showDefault)
+  <*> switch      (long "naive"             <> help ("Disable quote parsing, this might be the quick and dirty solution "
+                                                  ++ "for most parsing failures due to the file not compling the CSV specification "
+                                                  ++ "precisely"))
+  <*> option auto (long "margin-width"      <> short 'm'        <> metavar "INT"        <> value 1      <> showDefault
+                                            <> help "Num of spaces between columns")
+  <*> switch      (long "use-colors"        <> short 'z'
+                                            <> help "Enable colors")
+  <*> option auto (long "colors"            <> metavar "COLORS" <> value [Yellow, Blue]                 <> showDefault
+                                            <> help ("Comma delimited colors that will be cycled through. A color can be one of "
+                                                   ++"Black, Red, Green, Yellow, Blue, Magenta, Cyan, or White"))
+  <*> option auto (long "num-probing-lines" <> short 'p'        <> metavar "INT"        <> value (-1)   <> showDefault
+                                            <> help "If set to -1, will use twice the $LINES env variable")
 
 
 optparser :: OPT.Parser (ParsingEnv, [FilePath])
