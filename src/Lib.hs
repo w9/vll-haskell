@@ -8,6 +8,7 @@ module Lib
     ( module Lib
     ) where
 
+import Safe
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State.Lazy
@@ -36,6 +37,7 @@ import System.Posix
 import System.IO
 import Control.Lens hiding (argument)
 import Options.Applicative.Simple hiding (Parser)
+import Options.Applicative.Types hiding (Parser)
 
 import qualified Options.Applicative.Simple as OPT
 import qualified Data.Csv as CSV
@@ -93,12 +95,32 @@ data ParsingEnv = ParsingEnv
   , _numProbingLines :: Int }
 makeLenses ''ParsingEnv
 
+listReader :: Read a => ReadM [a]
+listReader = do
+  s <- readerAsk
+  if head s == '['
+     then auto
+     else case readMay $ "[" ++ s ++ "]" of
+            Nothing -> readerError $ "Only comma separated values are allowed. Got " ++ show s
+            Just c  -> return c
+
+charReader :: ReadM Char
+charReader = do
+  s <- readerAsk
+  case readMay $ "'" ++ s ++ "'" of
+    Nothing -> readerError $ "Only a single ASNI character is allowed. Got " ++ show s
+    Just c  -> return c
+
+maybeReader :: (String -> Maybe a) -> ReadM a
+maybeReader f = eitherReader $ \arg ->
+  maybe (Left $ "cannot parse value `" ++ arg ++ "'") pure . f $ arg
+
 envParser :: OPT.Parser ParsingEnv
 envParser = ParsingEnv
-  <$> option auto (long "column-separator"  <> short 's'        <> metavar "CHAR"       <> value '\NUL' <> showDefault
+  <$> option charReader (long "column-separator"  <> short 's'        <> metavar "CHAR"       <> value '\NUL' <> showDefault
                                             <> help ("'\\NUL' means ',' for *.csv and '\\t' for all other extensions, "
                                                   ++ "including pipes. You might want to use --naive as well if you set this manually"))
-  <*> option auto (long "comment-prefix"    <> short 'c'        <> metavar "CHAR"       <> value '#'    <> showDefault)
+  <*> option charReader (long "comment-prefix"    <> short 'c'        <> metavar "CHAR"       <> value '#'    <> showDefault)
   <*> switch      (long "naive"             <> help ("Disable quote parsing, this might be the quick and dirty solution "
                                                   ++ "for most parsing failures due to the file not compling the CSV specification "
                                                   ++ "precisely"))
@@ -106,7 +128,7 @@ envParser = ParsingEnv
                                             <> help "Num of spaces between columns")
   <*> switch      (long "use-colors"        <> short 'z'
                                             <> help "Enable colors")
-  <*> option auto (long "colors"            <> metavar "COLORS" <> value [Yellow, Blue]                 <> showDefault
+  <*> option listReader (long "colors"            <> metavar "COLORS" <> value [Yellow, Blue]                 <> showDefault
                                             <> help ("Comma delimited colors that will be cycled through. A color can be one of "
                                                    ++"Black, Red, Green, Yellow, Blue, Magenta, Cyan, or White"))
   <*> option auto (long "num-probing-lines" <> short 'p'        <> metavar "INT"        <> value (-1)   <> showDefault

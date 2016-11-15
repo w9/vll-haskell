@@ -30,6 +30,7 @@ library
                      , optparse-simple
                      , terminal-size
                      , unix
+                     , safe
   default-language:    Haskell2010
 
 executable vl
