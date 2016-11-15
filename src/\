@@ -119,16 +119,15 @@ envParser :: OPT.Parser ParsingEnv
 envParser = ParsingEnv
   <$> option charReader
       ( long "column-separator" <> short 's' <> metavar "CHAR" <> value '\NUL' <> showDefault
-     <> help
-        ( "'\\NUL' means ',' for *.csv and '\\t' for all other extensions, "
-       ++ "including pipes. You might want to use --naive as well if you set this manually" ))
+     <> help ("'\\NUL' means ',' for *.csv and '\\t' for all other extensions, "
+            ++ "including pipes. You might want to use --naive as well if you set this manually"))
 
   <*> option charReader
       ( long "comment-prefix"
      <> short 'c'
      <> metavar "CHAR"
      <> value '#'
-     <> showDefault )
+     <> showDefault)
 
   <*> switch
       ( long "naive"
@@ -136,7 +135,6 @@ envParser = ParsingEnv
         ( "Disable quote parsing, this might be the quick and dirty solution "
        ++ "for most parsing failures due to the file not compling the CSV specification "
        ++ "precisely" ) )
-
   <*> option auto
       ( long "margin-width"
      <> short 'm'
@@ -144,12 +142,10 @@ envParser = ParsingEnv
      <> value 1
      <> showDefault
      <> help "Num of spaces between columns" )
-
   <*> switch
       ( long "use-colors"
      <> short 'z'
      <> help "Enable colors" )
-
   <*> option listReader
       ( long "colors"
      <> metavar "COLORS"
@@ -158,7 +154,6 @@ envParser = ParsingEnv
      <> help
         ( "Comma delimited colors that will be cycled through. A color can be one of "
        ++"Black, Red, Green, Yellow, Blue, Magenta, Cyan, or White" ))
-
   <*> option auto
       ( long "num-probing-lines"
      <> short 'p'
