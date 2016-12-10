@@ -1,3 +1,5 @@
+-- TODO: add "maximum-num-columns"
+
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -14,6 +16,7 @@ import Control.Monad
 import Control.Monad.State.Lazy
 import Control.Monad.Reader
 import Control.Monad.RWS.Lazy
+import Control.Monad.Trans.Except
 import Data.Csv.Incremental
 import Data.List
 import Data.Bool
@@ -71,12 +74,6 @@ wrapInColor x s = pre <> s <> post
 updateLineWidths :: [Int64] -> [Int64] -> [Int64]
 updateLineWidths = zipWithLonger 0 max
 
-formatLine :: Bool -> [Color] -> Int64 -> [Int64] -> [BSL.ByteString] -> BSL.ByteString
-formatLine useColors colors marginWidth widths = (<> "$")
-                                     . BSL.concat
-                                     . (if useColors then wrapLineInColors colors else id)
-                                     . rewidthLine marginWidth widths
-
 
 type BS = BSL.ByteString
 type Parserf a = BS.ByteString -> Parser a
@@ -92,8 +89,18 @@ data ParsingEnv = ParsingEnv
   , _marginWidth :: Int64
   , _useColors :: Bool
   , _colors :: [Color]
-  , _numProbingLines :: Int }
+  , _numProbingLines :: Int
+  , _chopLen :: Int64 }
 makeLenses ''ParsingEnv
+
+
+
+
+--formatLine :: Bool -> [Color] -> Int64 -> [Int64] -> [BSL.ByteString] -> BSL.ByteString
+--formatLine useColors colors marginWidth widths = (<> "$")
+--                                     . BSL.concat
+--                                     . (if useColors then wrapLineInColors colors else id)
+--                                     . rewidthLine marginWidth widths
 
 listReader :: Read a => ReadM [a]
 listReader = do
@@ -102,14 +109,14 @@ listReader = do
      then auto
      else case readMay $ "[" ++ s ++ "]" of
             Nothing -> readerError $ "Only comma separated values are allowed. Got " ++ show s
-            Just c  -> return c
+            Just c  -> pure c
 
 charReader :: ReadM Char
 charReader = do
   s <- readerAsk
   case readMay $ "'" ++ s ++ "'" of
     Nothing -> readerError $ "Only a single ASNI character is allowed. Got " ++ show s
-    Just c  -> return c
+    Just c  -> pure c
 
 maybeReader :: (String -> Maybe a) -> ReadM a
 maybeReader f = eitherReader $ \arg ->
@@ -167,10 +174,18 @@ envParser = ParsingEnv
      <> showDefault
      <> help "If set to -1, will use twice the $LINES env variable" )
 
+  <*> option auto
+      ( long "chop-length"
+     <> short 'g'
+     <> metavar "INT"
+     <> value 1000
+     <> showDefault
+     <> help "Chop the column if longer than this length." )
+
 
 
 optparser :: OPT.Parser (ParsingEnv, [FilePath])
-optparser = liftA2 (,) envParser (some $ argument str (metavar "FILENAME..."))
+optparser = liftA2 (,) envParser (many $ argument str (metavar "FILENAME..."))
 
 data ParsingState = ParsingState
   { _cellWidths  :: [Int64]
@@ -180,6 +195,24 @@ makeLenses ''ParsingState
 
 
 type ParsingRWS = RWS ParsingEnv [BS] ParsingState
+
+formatLine :: [BSL.ByteString] -> ParsingRWS BSL.ByteString
+formatLine l = do
+  useColors   <- view useColors
+  colors      <- view colors
+  marginWidth <- view marginWidth
+  chopLen     <- view chopLen
+
+  cellWidths  <- use cellWidths
+
+  let cellWidths' = zipWith min cellWidths (repeat chopLen)
+
+  pure
+     . (<> "$")
+     . BSL.concat
+     . (if useColors then wrapLineInColors colors else id)
+     . rewidthLine marginWidth cellWidths'
+     $ l
 
 procedure :: [BSL.ByteString] -> ParsingRWS ()
 procedure lines = do
@@ -195,11 +228,8 @@ releaseCache = do
   forM_ cls $ \case
     Comment c -> tell [c]
     Cells cs  -> do
-        ws <- use cellWidths
-        useColors <- view useColors
-        colors <- view colors
-        marginWidth <- view marginWidth
-        tell [formatLine useColors colors marginWidth ws cs]
+        output <- formatLine cs
+        tell [output]
   cachedLines .= []
 
 
@@ -265,13 +295,12 @@ parseAndPrint :: BS -> ParsingRWS ()
 parseAndPrint l = do
   let contComment l = tell [l]
   let contCells cs = do
-        ws <- use cellWidths       -- `ws` is kept updated in the `tryCSVParse` module so we only need to extract it
-        useColors <- view useColors
-        colors <- view colors
-        marginWidth <- view marginWidth
-        tell [formatLine useColors colors marginWidth ws cs]
+        output <- formatLine cs
+        tell [output]
   tryParse contComment contCells l
 
+
+-- TODO: add options to not show $ at the end
 
 
 cmdLine :: IO ()
@@ -280,27 +309,31 @@ cmdLine = do
 
     ((initEnv, fnames),()) <- simpleOptions "0.0.1" "(V)iew (L)arge table. Fast." "" optparser empty
 
-    forM_ fnames $ \ fname -> do
+    isPipe <- liftM not $ queryTerminal stdInput
 
-      let isCSV = endswith ".csv" fname
-      let csvColSepChar = bool '\t' ',' isCSV
+    let fname | not (null fnames) = head fnames
+              | isPipe = ""
+              | otherwise = error "Filenames needed."
 
-      terminalHeight <- liftM ((*2) . head . (++ [80]) . map height . catMaybes)
-                      . sequence . map hSize
-                      $ [stdout, stderr, stdin]
+    let isCSV = endswith ".csv" fname
+    let csvColSepChar = bool '\t' ',' isCSV
 
-      let initEnv' = initEnv & colSep %~ (\ x -> if (x == '\NUL') then csvColSepChar else x)
-                             & numProbingLines %~ (\ x -> if (x == (-1)) then terminalHeight else x)
+    terminalHeight <- liftM ((*2) . head . (++ [80]) . map height . catMaybes)
+                    . sequence . map hSize
+                    $ [stdout, stderr, stdin]
 
-      let initState = ParsingState
-            { _cellWidths  = []
-            , _lastParserf = Nothing
-            , _cachedLines = [] }
+    let initEnv' = initEnv & colSep %~ (\ x -> if (x == '\NUL') then csvColSepChar else x)
+                           & numProbingLines %~ (\ x -> if (x == (-1)) then terminalHeight else x)
 
-      fcontent <- BSL.readFile fname
-      let fcontentWithComments = BSL.lines fcontent
-      let flines = BSL.lines fcontent
-      mapM_ BSL.putStrLn . (^. _2) . (\rws -> evalRWS rws initEnv' initState) $ procedure flines
+    fcontent <- liftM BSL.concat . sequence . (if isPipe then (BSL.getContents:) else id) . map BSL.readFile $ fnames
+
+    let flines = BSL.lines fcontent
+    let initState = ParsingState
+          { _cellWidths  = []
+          , _lastParserf = Nothing
+          , _cachedLines = [] }
+
+    mapM_ BSL.putStrLn . (^. _2) . (\rws -> evalRWS rws initEnv' initState) $ procedure flines
 
 
 -- |               | _cellWidths | _lastParser | _cachedLines | r _initParserf | w _output |
