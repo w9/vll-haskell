@@ -318,7 +318,7 @@ cmdLine = do
               | otherwise = error "Filenames needed."
 
     let isCSV = endswith ".csv" fname
-    let csvColSepChar = bool '\t' ',' isCSV
+    let csvColSepChar = if isCSV then ',' else '\t'
 
     terminalHeight <- liftM ((*2) . head . (++ [80]) . map height . catMaybes)
                     . sequence . map hSize
