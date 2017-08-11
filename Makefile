@@ -1,3 +1,5 @@
-main:
-	stack build
-	stack exec vll ~/tmp/test_csv/companies.csv | less 
+build:
+	stack setup && stack build
+
+install:
+	stack install
