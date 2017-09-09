@@ -1,12 +1,25 @@
 (V)iew (L)arge table. Fast.
 ===========================
 
-Installation
-------------
+Binary installation
+-------------------
 
-First, you need to install [Stack](https://docs.haskellstack.org/en/stable/README/). After Stack is
-installed, clone this repo, `cd` into it and run the following command in your
-shell:
+Grab the binaries from
+the [releases](https://github.com/w9/vll-haskell/releases) page and put it in
+your PATH -- profit!
+
+Get help
+--------
+
+    $ vl --help
+
+Build from source
+-----------------
+
+First, you need to install [Stack](https://docs.haskellstack.org/en/stable/README/).
+
+If you have Stack already, clone this repo, `cd` into it and run the following
+command in your shell:
 
     $ make
     $ make install
