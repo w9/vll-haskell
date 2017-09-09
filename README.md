@@ -1,6 +1,8 @@
 (V)iew (L)arge table. Fast.
 ===========================
 
+<a href="https://asciinema.org/a/03hTuK0wksayMLFjWFEmgKrZF" target="_blank"><img src="https://asciinema.org/a/03hTuK0wksayMLFjWFEmgKrZF.png" /></a>
+
 Binary installation
 -------------------
 
