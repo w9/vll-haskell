@@ -34,11 +34,11 @@ column width, and then immediately output the formatted table. This makes it
 particularly suitable for viewing large ascii tables.
 
 **VLL** guesses the format by the file's extension. If the file has extension
-".csv", it is treated as a CSV file, otherwise as a TSV file. The latter
+".csv", it is treated as a CSV file, otherwise a TSV file. The latter
 includes the cases where the input is *piped* in.
 
 A CSV/TSV file is assumed to *strictly* follow [RFC 4180](https://tools.ietf.org/html/rfc4180).
-Usually, if you encounters a parse error, it's because the file doesn't follow
+If you encounter a parse error, usually it's because the file doesn't follow
 the standard strictly, (e.g., its use of quotes or escapse sequences doesn't
 comply with the standard,) in which case the `--naive` option fixes most
 problems. If the file complies RFC 4180, **VLL** escapses special characters
