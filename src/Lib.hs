@@ -1,59 +1,60 @@
 -- TODO: add "maximum-num-columns"
 
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE MultiWayIf        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE TemplateHaskell   #-}
 
 module Lib
     ( module Lib
     ) where
 
-import Safe
-import Control.Applicative
-import Control.Monad
-import Control.Monad.State.Lazy
-import Control.Monad.Reader
-import Control.Monad.RWS.Lazy
-import Control.Monad.Trans.Except
-import Data.Csv.Incremental
-import Data.List
-import Data.Bool
-import Data.String.Utils
-import Data.Char
-import Data.Word
-import Data.Int
-import Data.Maybe
-import Data.Foldable
-import Data.Monoid
-import Data.Vector (Vector)
-import Data.Text (Text)
-import Debug.Trace
-import System.Environment
-import System.Console.Terminal.Size
-import System.Exit
-import System.Console.ANSI
-import System.Console.GetOpt
-import System.Posix.Terminal
-import System.Posix
-import System.IO
-import Control.Lens hiding (argument)
-import Options.Applicative.Simple hiding (Parser)
-import Options.Applicative.Types hiding (Parser)
+import           Control.Applicative
+import           Control.Lens                 hiding (argument)
+import           Control.Monad
+import           Control.Monad.Reader
+import           Control.Monad.RWS.Lazy
+import           Control.Monad.State.Lazy
+import           Control.Monad.Trans.Except
+import           Data.Bool
+import           Data.Char
+import           Data.Csv.Incremental
+import           Data.Foldable
+import           Data.Int
+import           Data.List
+import           Data.Maybe
+import           Data.Monoid
+import           Data.String.Utils
+import           Data.Text                    (Text)
+import           Data.Vector                  (Vector)
+import           Data.Word
+import           Debug.Trace
+import           Options.Applicative.Simple   hiding (Parser)
+import           Options.Applicative.Types    hiding (Parser)
+import           Safe
+import           System.Console.ANSI
+import           System.Console.GetOpt
+import           System.Console.Terminal.Size
+import           System.Environment
+import           System.Exit
+import           System.IO
+import           System.Posix
+import           System.Posix.Terminal
 
-import qualified Options.Applicative.Simple as OPT
-import qualified Data.Csv as CSV
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy.Char8 as BSL
-import qualified Data.Vector as V
-import qualified Data.Text as T
+import qualified Data.ByteString.Char8        as BS
+import qualified Data.ByteString.Lazy.Char8   as BSL
+import qualified Data.Csv                     as CSV
+import qualified Data.Text                    as T
+import qualified Data.Vector                  as V
+import qualified Options.Applicative.Simple   as OPT
 
-   
+
+
 zipWithLonger :: a -> (a -> a -> a) -> [a] -> [a] -> [a]
-zipWithLonger _ _ [] [] = []
-zipWithLonger c f [] (b:bs) = f c b : zipWithLonger c f [] bs
-zipWithLonger c f (a:as) [] = f a c : zipWithLonger c f as []
+zipWithLonger _ _ [] []         = []
+zipWithLonger c f [] (b:bs)     = f c b : zipWithLonger c f [] bs
+zipWithLonger c f (a:as) []     = f a c : zipWithLonger c f as []
 zipWithLonger c f (a:as) (b:bs) = f a b : zipWithLonger c f as bs
 
 makeWidth :: Int64 -> Int64 -> BSL.ByteString -> BSL.ByteString
@@ -74,26 +75,29 @@ wrapInColor x s = pre <> s <> post
 updateLineWidths :: [Int64] -> [Int64] -> [Int64]
 updateLineWidths = zipWithLonger 0 max
 
-
 type BS = BSL.ByteString
-type Parserf a = BS.ByteString -> Parser a
+type Parserf a = (BS.ByteString -> Parser a)
+
+haha :: Int -> Int
+haha = do
+  let a = 1
+  let b = 2
+  return 12
 
 data ParsedLine = Comment BSL.ByteString
                 | Cells [BSL.ByteString]
 
 -- | magnify the env (options) to the sub-routines
 data ParsingEnv = ParsingEnv
-  { _colSep :: Char
-  , _commentPrefix :: Char
-  , _naiveParsing :: Bool
-  , _marginWidth :: Int64
-  , _useColors :: Bool
-  , _colors :: [Color]
+  { _colSep          :: Char
+  , _commentPrefix   :: Char
+  , _naiveParsing    :: Bool
+  , _marginWidth     :: Int64
+  , _useColors       :: Bool
+  , _colors          :: [Color]
   , _numProbingLines :: Int
-  , _chopLen :: Int64 }
+  , _chopLen         :: Int64 }
 makeLenses ''ParsingEnv
-
-
 
 
 --formatLine :: Bool -> [Color] -> Int64 -> [Int64] -> [BSL.ByteString] -> BSL.ByteString
@@ -249,7 +253,7 @@ tryParseCells contCells pf l = do
                        contCells cs
                      _ -> error $ "Unexpected: more than one (" ++ show (length rs) ++ ") records received in `Many`"
 
-  
+
 -- this function should not know whether `pf` is an initParser or
 -- a cached parser
 tryCSVParse :: (BS -> ParsingRWS ()) -> ([BS] -> ParsingRWS ()) -> BS -> ParsingRWS ()
@@ -305,8 +309,6 @@ parseAndPrint l = do
 
 cmdLine :: IO ()
 cmdLine = do
-    args <- getArgs
-
     ((initEnv, fnames),()) <- simpleOptions "0.0.1" "(V)iew (L)arge table. Fast." "" optparser empty
 
     isPipe <- liftM not $ queryTerminal stdInput
@@ -316,7 +318,7 @@ cmdLine = do
               | otherwise = error "Filenames needed."
 
     let isCSV = endswith ".csv" fname
-    let csvColSepChar = bool '\t' ',' isCSV
+    let csvColSepChar = if isCSV then ',' else '\t'
 
     terminalHeight <- liftM ((*2) . head . (++ [80]) . map height . catMaybes)
                     . sequence . map hSize
